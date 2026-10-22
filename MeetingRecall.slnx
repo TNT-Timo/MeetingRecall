@@ -1,0 +1,26 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+    <Platform Name="ARM64" />
+  </Configurations>
+  <Project Path="MeetingRecall.Core/MeetingRecall.Core.csproj" />
+  <Project Path="MeetingRecall.Desktop/MeetingRecall.Desktop.csproj">
+    <Platform Solution="*|ARM64" Project="ARM64" />
+    <Platform Solution="*|x64" Project="x64" />
+    <Platform Solution="*|x86" Project="x86" />
+    <Deploy />
+  </Project>
+  <Project Path="MeetingRecall.Infrastructure/MeetingRecall.Infrastructure.csproj" />
+  <Project Path="MeetingRecall.QwenWorker/MeetingRecall.QwenWorker.csproj">
+    <Platform Solution="*|ARM64" Project="x64" />
+    <Platform Solution="*|x64" Project="x64" />
+    <Platform Solution="*|x86" Project="x64" />
+  </Project>
+  <Project Path="MeetingRecall.TranscriptionWorker/MeetingRecall.TranscriptionWorker.csproj">
+    <Platform Solution="*|ARM64" Project="x64" />
+    <Platform Solution="*|x64" Project="x64" />
+    <Platform Solution="*|x86" Project="x64" />
+  </Project>
+  <Project Path="MeetingRecall.Tests/MeetingRecall.Tests.csproj" />
+</Solution>

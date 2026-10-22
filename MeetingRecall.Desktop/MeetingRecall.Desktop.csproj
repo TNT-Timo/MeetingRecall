@@ -1,0 +1,167 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>MeetingRecall.Desktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\MeetingRecall.ico</ApplicationIcon>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
+    <UseWinUI>true</UseWinUI>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>1.0.55</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <Target Name="SetBuildIdentity" BeforeTargets="GenerateAssemblyInfo">
+    <Exec Command="git rev-parse --short HEAD"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          IgnoreExitCode="true"
+          StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitShort" />
+    </Exec>
+    <PropertyGroup>
+      <GitCommitShort Condition="'$(GitCommitShort)' == ''">unknown</GitCommitShort>
+      <InformationalVersion>$(Version)+$(GitCommitShort)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
+
+  <ItemGroup>
+    <Content Include="Assets\MeetingRecall.ico" />
+    <Content Include="Assets\SplashScreen.scale-200.png" />
+    <Content Include="Assets\LockScreenLogo.scale-200.png" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Content Include="Assets\StoreLogo.png" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeetingRecall.Core\MeetingRecall.Core.csproj" />
+    <ProjectReference Include="..\MeetingRecall.Infrastructure\MeetingRecall.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <ProjectCapability Include="Msix" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2526" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.3.1" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
+  </PropertyGroup>
+
+  <!-- Keep WinUI 3 framework files intact: trimmed / ReadyToRun publish caused startup failures. -->
+  <PropertyGroup>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <WhisperWorkerProject>$(MSBuildProjectDirectory)\..\MeetingRecall.TranscriptionWorker\MeetingRecall.TranscriptionWorker.csproj</WhisperWorkerProject>
+    <WhisperWorkerOutputDirectory>$(MSBuildProjectDirectory)\..\MeetingRecall.TranscriptionWorker\bin\$(Platform)\$(Configuration)\net8.0\win-x64</WhisperWorkerOutputDirectory>
+    <QwenWorkerProject>$(MSBuildProjectDirectory)\..\MeetingRecall.QwenWorker\MeetingRecall.QwenWorker.csproj</QwenWorkerProject>
+    <QwenWorkerOutputDirectory>$(MSBuildProjectDirectory)\..\MeetingRecall.QwenWorker\bin\$(Platform)\$(Configuration)\net8.0\win-x64</QwenWorkerOutputDirectory>
+  </PropertyGroup>
+
+  <Target Name="BuildWhisperWorker"
+          BeforeTargets="CopyWhisperWorkerArtifacts"
+          Condition="'$(Platform)' == 'x64'">
+    <MSBuild Projects="$(WhisperWorkerProject)"
+             Targets="Restore;Build"
+             Properties="Configuration=$(Configuration);Platform=x64;RuntimeIdentifier=win-x64" />
+  </Target>
+
+  <Target Name="BuildQwenWorker"
+          BeforeTargets="CopyQwenWorkerArtifacts"
+          Condition="'$(Platform)' == 'x64'">
+    <MSBuild Projects="$(QwenWorkerProject)"
+             Targets="Restore;Build"
+             Properties="Configuration=$(Configuration);Platform=x64;RuntimeIdentifier=win-x64" />
+  </Target>
+
+  <Target Name="CopyQwenRuntimeArtifacts"
+          AfterTargets="Build"
+          Condition="'$(Platform)' == 'x64'">
+    <ItemGroup>
+      <QwenRuntimeArtifact Include="$(OutDir)runtimes\win-x64\native\**\*.*" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(OutDir)runtimes\win-x64\native\cuda12\ggml-cuda.dll')"
+           Text="The LLamaSharp CUDA runtime was not restored into the desktop output." />
+    <Copy SourceFiles="@(QwenRuntimeArtifact)"
+          DestinationFiles="@(QwenRuntimeArtifact->'$(OutDir)AppX\runtimes\win-x64\native\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(OutDir)AppX\runtimes\win-x64\native\cuda12\ggml-cuda.dll')"
+           Text="The LLamaSharp CUDA runtime was not copied into the WinUI AppX output." />
+  </Target>
+
+  <Target Name="CopyWhisperWorkerArtifacts"
+          AfterTargets="Build"
+          Condition="'$(Platform)' == 'x64'">
+    <ItemGroup>
+      <WhisperWorkerArtifact Include="$(WhisperWorkerOutputDirectory)\**\*.*" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(WhisperWorkerOutputDirectory)\MeetingRecall.TranscriptionWorker.exe')"
+           Text="The isolated Whisper GPU worker was not built." />
+    <Copy SourceFiles="@(WhisperWorkerArtifact)"
+          DestinationFiles="@(WhisperWorkerArtifact->'$(OutDir)AppX\WhisperWorker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(OutDir)AppX\WhisperWorker\MeetingRecall.TranscriptionWorker.exe')"
+           Text="The isolated Whisper GPU worker was not copied into the WinUI AppX output." />
+  </Target>
+
+  <Target Name="CopyQwenWorkerArtifacts"
+          AfterTargets="Build"
+          Condition="'$(Platform)' == 'x64'">
+    <ItemGroup>
+      <QwenWorkerArtifact Include="$(QwenWorkerOutputDirectory)\**\*.*" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(QwenWorkerOutputDirectory)\MeetingRecall.QwenWorker.exe')"
+           Text="The isolated Qwen GPU worker was not built." />
+    <Copy SourceFiles="@(QwenWorkerArtifact)"
+          DestinationFiles="@(QwenWorkerArtifact->'$(OutDir)AppX\QwenWorker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(OutDir)AppX\QwenWorker\MeetingRecall.QwenWorker.exe')"
+           Text="The isolated Qwen GPU worker was not copied into the WinUI AppX output." />
+  </Target>
+
+  <!-- Include the isolated GPU workers in the unpackaged publish output. -->
+  <Target Name="CopyWorkersToPublish"
+          AfterTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <PropertyGroup>
+      <PublishWhisperWorkerDirectory>$(MSBuildProjectDirectory)\..\MeetingRecall.TranscriptionWorker\bin\x64\$(Configuration)\net8.0\win-x64</PublishWhisperWorkerDirectory>
+      <PublishQwenWorkerDirectory>$(MSBuildProjectDirectory)\..\MeetingRecall.QwenWorker\bin\x64\$(Configuration)\net8.0\win-x64</PublishQwenWorkerDirectory>
+    </PropertyGroup>
+    <ItemGroup>
+      <PublishWhisperWorker Include="$(PublishWhisperWorkerDirectory)\**\*.*" />
+      <PublishQwenWorker Include="$(PublishQwenWorkerDirectory)\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PublishWhisperWorker)"
+          DestinationFiles="@(PublishWhisperWorker->'$(PublishDir)WhisperWorker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(PublishQwenWorker)"
+          DestinationFiles="@(PublishQwenWorker->'$(PublishDir)QwenWorker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)WhisperWorker\MeetingRecall.TranscriptionWorker.exe')"
+           Text="Whisper worker was not copied into the publish output." />
+    <Error Condition="!Exists('$(PublishDir)QwenWorker\MeetingRecall.QwenWorker.exe')"
+           Text="Qwen worker was not copied into the publish output." />
+  </Target>
+</Project>

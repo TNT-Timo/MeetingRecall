@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "MeetingRecall.Desktop (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "MeetingRecall.Desktop (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

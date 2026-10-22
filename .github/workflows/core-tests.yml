@@ -1,0 +1,36 @@
+name: Build and test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - feature/**
+      - codex/**
+      - agent/**
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore tests
+        run: dotnet restore MeetingRecall.Tests/MeetingRecall.Tests.csproj
+
+      - name: Run tests
+        run: dotnet test MeetingRecall.Tests/MeetingRecall.Tests.csproj --configuration Release --no-restore --logger "console;verbosity=normal"
+
+      - name: Build WinUI desktop app
+        if: ${{ always() }}
+        run: dotnet build MeetingRecall.Desktop/MeetingRecall.Desktop.csproj --configuration Release -p:Platform=x64 -p:AppxPackageSigningEnabled=false -p:PublishTrimmed=false -p:PublishReadyToRun=false
