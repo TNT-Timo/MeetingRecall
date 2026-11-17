@@ -3,7 +3,7 @@
 ; Non-commercial use only
 
 #define MyAppName "MeetingRecall"
-#define MyAppVersion "1.0.55"
+#define MyAppVersion "1.0.56"
 #define MyAppPublisher "Timo"
 #define MyAppExeName "MeetingRecall.Desktop.exe"
 
@@ -29,7 +29,7 @@ DisableProgramGroupPage=yes
 ; Uncomment the following line to run in non administrative install mode (install for current user only).
 ;PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputBaseFilename=MeetingRecall-Setup-1.0.55
+OutputBaseFilename=MeetingRecall-Setup-1.0.56
 SolidCompression=yes
 WizardStyle=classic dark windows11
 
