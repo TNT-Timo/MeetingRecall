@@ -19,12 +19,13 @@ internal static class Program
     public static async Task<int> Main(string[] args)
     {
         SetErrorMode(ErrorMode.FailCriticalErrors | ErrorMode.NoGpFaultErrorBox);
-        if (args.Length != 2)
+        if (args.Length != 2 && (args.Length != 3 || args[2] != "--cpu"))
         {
-            Console.Error.WriteLine("Usage: MeetingRecall.QwenWorker <request> <result>");
+            Console.Error.WriteLine("Usage: MeetingRecall.QwenWorker <request> <result> [--cpu]");
             return 2;
         }
 
+        bool useGpu = args.Length == 2;
         string requestPath = Path.GetFullPath(args[0]);
         string resultPath = Path.GetFullPath(args[1]);
         try
@@ -45,24 +46,38 @@ internal static class Program
                 throw new InvalidDataException("The local GPU worker request is invalid.");
             }
 
-            string workerRoot = ConfigureCudaNativeRuntime();
             if (NativeLibraryConfig.LLama.LibraryHasLoaded)
             {
                 throw new InvalidOperationException(
-                    "The LLamaSharp native library was loaded before CUDA selection.");
+                    "The LLamaSharp native library was loaded before backend selection.");
             }
 
-            Console.Error.WriteLine(
-                "QwenWorker: forcing CUDA 12 through LLamaSharp's dependency-aware loader.");
-            NativeLibraryConfig.LLama
-                .WithCuda()
-                .WithVulkan(false)
-                .WithAutoFallback(false)
-                .SkipCheck()
-                .WithSearchDirectory(workerRoot)
-                .WithSelectingPolicy(new Cuda12OnlySelectingPolicy())
-                .WithLogCallback((level, message) =>
-                    Console.Error.Write($"LLamaSharp {level}: {message}"));
+            if (useGpu)
+            {
+                string workerRoot = ConfigureCudaNativeRuntime();
+                Console.Error.WriteLine(
+                    "QwenWorker: selecting CUDA 12 through LLamaSharp's dependency-aware loader.");
+                NativeLibraryConfig.LLama
+                    .WithCuda()
+                    .WithVulkan(false)
+                    .WithAutoFallback(false)
+                    .SkipCheck()
+                    .WithSearchDirectory(workerRoot)
+                    .WithSelectingPolicy(new Cuda12OnlySelectingPolicy())
+                    .WithLogCallback((level, message) =>
+                        Console.Error.Write($"LLamaSharp {level}: {message}"));
+            }
+            else
+            {
+                Console.Error.WriteLine("QwenWorker: selecting CPU backend.");
+                NativeLibraryConfig.LLama
+                    .WithCuda(false)
+                    .WithVulkan(false)
+                    .WithAutoFallback(true)
+                    .WithSearchDirectory(AppContext.BaseDirectory)
+                    .WithLogCallback((level, message) =>
+                        Console.Error.Write($"LLamaSharp {level}: {message}"));
+            }
 
             string modelFile = Path.GetFileName(request.ModelPath);
             bool qwenThinkingEnabled = !request.DisableThinking
@@ -71,13 +86,14 @@ internal static class Program
             var parameters = CreateModelParameters(
                 request.ModelPath,
                 qwenThinkingEnabled,
-                oversizedQwen72);
+                oversizedQwen72,
+                useGpu);
             using LLamaWeights weights = LLamaWeights.LoadFromFile(parameters);
 
             nuint deviceCount = NativeApi.ggml_backend_dev_count();
             Console.Error.WriteLine(
                 $"QwenWorker: registered GGML devices after model load: {deviceCount}.");
-            if (deviceCount <= 1)
+            if (useGpu && deviceCount <= 1)
             {
                 throw new InvalidOperationException(
                     "CUDA backend discovery failed: only the CPU GGML device was registered. "
@@ -85,7 +101,7 @@ internal static class Program
             }
 
             Console.Error.WriteLine(
-                $"QwenWorker: CUDA model load succeeded with GpuLayerCount={parameters.GpuLayerCount}.");
+                $"QwenWorker: {(useGpu ? "CUDA12" : "CPU")} model load succeeded with GpuLayerCount={parameters.GpuLayerCount}.");
             var executor = new StatelessExecutor(weights, parameters)
             {
                 ApplyTemplate = true,
@@ -140,7 +156,7 @@ internal static class Program
                 throw new InvalidDataException("The local GPU worker generated no output.");
             }
 
-            var result = new WorkerResult("CUDA12", generatedText);
+            var result = new WorkerResult(useGpu ? "CUDA12" : "CPU", generatedText);
             string partialResultPath = resultPath + ".partial";
             await using (var resultStream = new FileStream(
                              partialResultPath,
@@ -221,7 +237,8 @@ internal static class Program
     private static ModelParams CreateModelParameters(
         string modelPath,
         bool qwenThinkingEnabled,
-        bool oversizedQwen72) =>
+        bool oversizedQwen72,
+        bool useGpu) =>
         new(modelPath)
         {
             // Give the normal structured passes substantially more room than the old 8K
@@ -231,8 +248,8 @@ internal static class Program
             BatchSize = 512,
             UBatchSize = 256,
             // Kept for compatibility with the temporary historic 72B benchmark path.
-            GpuLayerCount = oversizedQwen72 ? 18 : -1,
-            FlashAttention = true,
+            GpuLayerCount = useGpu ? (oversizedQwen72 ? 18 : -1) : 0,
+            FlashAttention = useGpu,
             Threads = Math.Max(1, Environment.ProcessorCount - 1),
             BatchThreads = Math.Max(1, Environment.ProcessorCount - 1)
         };
