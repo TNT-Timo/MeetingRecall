@@ -89,7 +89,7 @@ Manuelle Qualitätsproben vor einem Release:
 ## Datenschutzgrenze
 
 Netzwerkzugriff erfolgt ausschließlich für den einmaligen Modelldownload. Die
-Inferenz läuft im isolierten lokalen Qwen-GPU-Worker. Chatverläufe werden lokal in
+Inferenz läuft im isolierten lokalen Qwen-Worker. CUDA wird bevorzugt; wenn die GPU-Ausführung fehlschlägt, wird automatisch ein separater CPU-Worker verwendet. Chatverläufe werden lokal in
 SQLite gespeichert, sind Bestandteil von Sicherungen und werden beim Löschen des
 Gesprächs beziehungsweise beim Werkreset über die bestehenden Datenbankregeln
 entfernt.
