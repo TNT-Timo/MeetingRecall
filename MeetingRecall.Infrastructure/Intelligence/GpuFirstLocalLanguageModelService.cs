@@ -304,7 +304,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
                     StringComparison.OrdinalIgnoreCase);
             int workerOutputTokens = qwenThinkingEnabled ? -1 : maximumOutputTokens;
 
-            WorkerAttempt attempt = await TryGenerateOnGpuAsync(
+            WorkerAttempt attempt = await TryGeneratePreferredBackendAsync(
                     modelPath,
                     systemPrompt,
                     userPrompt,
@@ -317,11 +317,11 @@ internal sealed class GpuFirstLocalLanguageModelService(
 
             if (attempt.Result is null)
             {
-                string error = attempt.Error ?? "The GPU worker failed without diagnostics.";
-                Debug.WriteLine("LOCAL LLM GPU WORKER FAILED — NO CPU FALLBACK. " + error);
+                string error = attempt.Error ?? "The local worker failed without diagnostics.";
+                Debug.WriteLine("LOCAL LLM WORKER FAILED. " + error);
                 throw new InvalidOperationException(
-                    "Das ausgewählte Sprachmodell konnte nicht auf der GPU gestartet werden. "
-                    + "Es wurde bewusst kein CPU-Fallback verwendet.\n\n"
+                    "Das lokale Sprachmodell konnte nicht ausgeführt werden. "
+                    + "Bitte prüfe, ob ausreichend Arbeitsspeicher verfügbar ist.\n\n"
                     + error);
             }
 
@@ -329,7 +329,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
             if ((isSummaryRequest || isTitleRequest)
                 && HasObviousEnglishNaturalLanguage(selectedOutput))
             {
-                WorkerAttempt germanRetry = await TryGenerateOnGpuAsync(
+                WorkerAttempt germanRetry = await TryGeneratePreferredBackendAsync(
                         modelPath,
                         systemPrompt
                         + "\n\nHARTER FEHLERKORREKTUR-PASS: Alle natürlichen Ausgabewerte ausschließlich auf Deutsch.",
@@ -369,8 +369,8 @@ internal sealed class GpuFirstLocalLanguageModelService(
                 LocalLanguageModelStage.Generating,
                 Fraction: 1));
             Debug.WriteLine(
-                $"Local LLM runtime: {attempt.Result.Runtime} · GPU worker; "
-                + $"full model offload · {modelManager.ModelDisplayName}; "
+                $"Local LLM runtime: {attempt.Result.Runtime} · isolated worker; "
+                + $"{modelManager.ModelDisplayName}; "
                 + $"thinking={(qwenThinkingEnabled ? "on" : "off")}; "
                 + $"output-budget={(workerOutputTokens < 0 ? "natural completion" : workerOutputTokens)}.");
             return selectedOutput;
@@ -460,7 +460,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
             {{transcript}}
             """;
 
-        WorkerAttempt frameAttempt = await TryGenerateOnGpuAsync(
+        WorkerAttempt frameAttempt = await TryGeneratePreferredBackendAsync(
                 modelPath,
                 GlobalFrameSystemPrompt,
                 prompt,
@@ -513,7 +513,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
             {{transcript}}
             """;
 
-        WorkerAttempt criticAttempt = await TryGenerateOnGpuAsync(
+        WorkerAttempt criticAttempt = await TryGeneratePreferredBackendAsync(
                 modelPath,
                 GlobalFrameCriticSystemPrompt,
                 criticPrompt,
@@ -585,7 +585,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
             }
             """;
 
-        WorkerAttempt repairAttempt = await TryGenerateOnGpuAsync(
+        WorkerAttempt repairAttempt = await TryGeneratePreferredBackendAsync(
                 modelPath,
                 FramingCorrectionSystemPrompt,
                 repairPrompt,
@@ -1116,7 +1116,9 @@ internal sealed class GpuFirstLocalLanguageModelService(
         return null;
     }
 
-    private static async Task<WorkerAttempt> TryGenerateOnGpuAsync(
+    private bool _gpuUnavailable;
+
+    private async Task<WorkerAttempt> TryGeneratePreferredBackendAsync(
         string modelPath,
         string systemPrompt,
         string userPrompt,
@@ -1126,6 +1128,47 @@ internal sealed class GpuFirstLocalLanguageModelService(
         IProgress<LocalLanguageModelProgress>? progress,
         CancellationToken cancellationToken)
     {
+        string? gpuError = null;
+        if (!_gpuUnavailable)
+        {
+            WorkerAttempt gpu = await TryGenerateWithBackendAsync(
+                modelPath, systemPrompt, userPrompt, maximumOutputTokens,
+                disableThinking, deterministicSampling, progress, cancellationToken,
+                useGpu: true).ConfigureAwait(false);
+            if (gpu.Result is not null)
+            {
+                return gpu;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            gpuError = gpu.Error;
+            _gpuUnavailable = true;
+            Debug.WriteLine("Local LLM CUDA worker failed; CPU fallback active for this session. " + gpuError);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new LocalLanguageModelProgress(LocalLanguageModelStage.LoadingModel));
+        WorkerAttempt cpu = await TryGenerateWithBackendAsync(
+            modelPath, systemPrompt, userPrompt, maximumOutputTokens,
+            disableThinking, deterministicSampling, progress, cancellationToken,
+            useGpu: false).ConfigureAwait(false);
+        return cpu.Result is not null || gpuError is null
+            ? cpu
+            : new WorkerAttempt(null, $"CUDA: {gpuError}\nCPU: {cpu.Error}");
+    }
+
+    private static async Task<WorkerAttempt> TryGenerateWithBackendAsync(
+        string modelPath,
+        string systemPrompt,
+        string userPrompt,
+        int maximumOutputTokens,
+        bool disableThinking,
+        bool deterministicSampling,
+        IProgress<LocalLanguageModelProgress>? progress,
+        CancellationToken cancellationToken,
+        bool useGpu)
+    {
+        string backend = useGpu ? "CUDA12" : "CPU";
         string workerPath = Path.Combine(
             AppContext.BaseDirectory,
             "QwenWorker",
@@ -1134,7 +1177,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
         {
             return new WorkerAttempt(
                 null,
-                $"GPU worker not found: {workerPath}");
+                $"{backend} worker not found: {workerPath}");
         }
 
         string workerDirectory = Path.GetDirectoryName(workerPath)
@@ -1184,16 +1227,20 @@ internal sealed class GpuFirstLocalLanguageModelService(
             };
             startInfo.ArgumentList.Add(requestPath);
             startInfo.ArgumentList.Add(resultPath);
+            if (!useGpu)
+            {
+                startInfo.ArgumentList.Add("--cpu");
+            }
 
             Debug.WriteLine(
-                $"Local LLM GPU worker starting from '{workerDirectory}' "
+                $"Local LLM {backend} worker starting from '{workerDirectory}' "
                 + $"with model '{Path.GetFileName(modelPath)}'.");
             using var process = new Process { StartInfo = startInfo };
             if (!process.Start())
             {
                 return new WorkerAttempt(
                     null,
-                    "GPU worker could not be started.");
+                    $"{backend} worker could not be started.");
             }
 
             Task<string> errorTask = process.StandardError.ReadToEndAsync();
@@ -1204,7 +1251,9 @@ internal sealed class GpuFirstLocalLanguageModelService(
                 cancellationToken);
             using var timeoutCancellation =
                 CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCancellation.CancelAfter(GetInferenceTimeout(maximumOutputTokens));
+            timeoutCancellation.CancelAfter(useGpu
+                ? GetInferenceTimeout(maximumOutputTokens)
+                : TimeSpan.FromHours(2));
 
             try
             {
@@ -1217,7 +1266,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
                 TryTerminate(process);
                 return new WorkerAttempt(
                     null,
-                    "GPU worker exceeded the inference timeout.");
+                    $"{backend} worker exceeded the inference timeout.");
             }
             catch (OperationCanceledException)
             {
@@ -1230,14 +1279,14 @@ internal sealed class GpuFirstLocalLanguageModelService(
             if (!string.IsNullOrWhiteSpace(error))
             {
                 Debug.WriteLine(
-                    "Local LLM GPU worker diagnostics:\n" + error.Trim());
+                    $"Local LLM {backend} worker diagnostics:\n" + error.Trim());
             }
 
             if (process.ExitCode != 0 || !File.Exists(resultPath))
             {
                 return new WorkerAttempt(
                     null,
-                    $"GPU worker exit code {process.ExitCode}: {error.Trim()}");
+                    $"{backend} worker exit code {process.ExitCode}: {error.Trim()}");
             }
 
             await using FileStream resultStream = File.OpenRead(resultPath);
@@ -1250,7 +1299,7 @@ internal sealed class GpuFirstLocalLanguageModelService(
             {
                 return new WorkerAttempt(
                     null,
-                    "GPU worker returned no result.");
+                    $"{backend} worker returned no result.");
             }
 
             return new WorkerAttempt(result, null);
